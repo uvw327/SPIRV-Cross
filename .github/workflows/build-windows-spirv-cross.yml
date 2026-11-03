@@ -2,6 +2,8 @@ name: Build spirv-cross (Windows CLI)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ build/spirv-cross-win ]
 
 permissions:
   contents: read
