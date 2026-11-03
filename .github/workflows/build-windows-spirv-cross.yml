@@ -1,0 +1,84 @@
+name: Build spirv-cross (Windows CLI)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-cli:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache glslang / SPIRV-Tools
+        id: cache-externals
+        uses: actions/cache@v4
+        with:
+          path: external/*-build/output
+          key: windows-latest externals ${{ hashFiles('checkout_glslang_spirv_tools.sh', 'build_glslang_spirv_tools.sh') }}
+
+      - name: Pull glslang / SPIRV-Tools
+        if: steps.cache-externals.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: ./checkout_glslang_spirv_tools.sh
+
+      - name: Build glslang / SPIRV-Tools
+        if: steps.cache-externals.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: ./build_glslang_spirv_tools.sh Release 4
+
+      - name: Configure SPIRV-Cross
+        shell: bash
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DSPIRV_CROSS_WERROR=OFF -DSPIRV_CROSS_SHARED=OFF -DCMAKE_INSTALL_PREFIX=output -DCMAKE_BUILD_TYPE=Release -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_CLI=ON
+
+      - name: Build SPIRV-Cross
+        shell: bash
+        working-directory: ${{ github.workspace }}/build
+        run: cmake --build . --config Release --parallel 4
+
+      - name: Collect CLI
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          exe=$(find build -type f -name 'spirv-cross.exe' | head -1)
+          echo "cli binary: $exe"
+          test -n "$exe"
+          cp "$exe" dist/spirv-cross.exe
+          d=$(dirname "$exe")
+          find "$d" -maxdepth 1 -name '*.dll' -exec cp -t dist/ {} + 2>/dev/null || true
+          ls -l dist
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          ./dist/spirv-cross.exe --help | head -30 || true
+          as=$(find external -type f -name 'spirv-as.exe' | head -1)
+          sm=$(find reference_test_shaders -name '*.spvasm' | head -1)
+          echo "spirv-as: $as"
+          echo "sample:   $sm"
+          if [ -n "$as" ] && [ -n "$sm" ]; then
+            "$as" "$sm" -o t.spv
+            ./dist/spirv-cross.exe t.spv --output t.glsl
+            echo "--- decompiled head ---"
+            head -25 t.glsl
+          else
+            echo "SKIP asm roundtrip (spirv-as or sample missing)"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spirv-cross-win64
+          path: dist
+          retention-days: 30
